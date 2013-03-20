@@ -16,22 +16,22 @@
 #include "unistd.h"
 #include "termios.h"
 
-#define	CMD_INIT			((unsigned char)0x7F)
-#define	CMD_GET				((unsigned char)0x00)
-#define	CMD_GET_BL_VER		((unsigned char)0x01)
+#define	CMD_INIT				((unsigned char)0x7F)
+#define	CMD_GET					((unsigned char)0x00)
+#define	CMD_GET_BL_VER			((unsigned char)0x01)
 
-#define	CMD_GET_ID			((unsigned char)0x02)
-#define	CMD_READ_MEM		((unsigned char)0x11)
-#define	CMD_GO				((unsigned char)0x21)
-#define	CMD_WRITE_MEM		((unsigned char)0x31)
-#define	CMD_ERASE			((unsigned char)0x43)
-#define	CMD_EXT_ERASE		((unsigned char)0x44)
-#define	CMD_WRITE_PROTECT	((unsigned char)0x63)
-#define	CMD_WRITE_UNPROTECT	((unsigned char)0x73)
-#define	CMD_READ_PROTECT	((unsigned char)0x82)
-#define	CMD_READ_UNPROTECT	((unsigned char)0x92)
+#define	CMD_GET_ID				((unsigned char)0x02)
+#define	CMD_READ_MEM			((unsigned char)0x11)
+#define	CMD_GO					((unsigned char)0x21)
+#define	CMD_WRITE_MEM			((unsigned char)0x31)
+#define	CMD_ERASE				((unsigned char)0x43)
+#define	CMD_EXT_ERASE			((unsigned char)0x44)
+#define	CMD_WRITE_PROTECT		((unsigned char)0x63)
+#define	CMD_WRITE_UNPROTECT		((unsigned char)0x73)
+#define	CMD_READOUT_PROTECT		((unsigned char)0x82)
+#define	CMD_READOUT_UNPROTECT	((unsigned char)0x92)
 
-#define	CMD_GLOBAL_ERASE	((unsigned char)0xFF)
+#define	CMD_GLOBAL_ERASE		((unsigned char)0xFF)
 
 #define	ACK		0x79
 #define	NACK	0x1F
@@ -134,7 +134,7 @@ int main(void){
 						}
 						break;
 
-			case 'r':	printf("Enter start address (HEX)...");
+			case 'm':	printf("Enter start address (HEX)...");
 						scanf("%x", &addr);
 						printf("Enter num bytes (DEC)...");
 						scanf("%d", &num);
@@ -223,6 +223,41 @@ int main(void){
 							}
 						}
 						break;
+
+			case 't':	if(send_command("WRITE PROTECT", CMD_WRITE_PROTECT) == ACK){
+							printf("Enter amount of sectors to be protected (DEC)...");
+							scanf("%x", &num);
+
+							if(num > 0){
+								for(i=0; i<num; i++){
+									printf("Enter [%d] sector number to be protected...", i);
+									scanf("%d", &addr);
+									str[i] = addr&0xFF;
+								}
+
+								printf("Protecting sectors...");
+								send_byte(num-1);			checksum  =	num-1;
+								for(i=0; i<num; i++){
+									send_byte(str[i]);		checksum ^= str[i];
+								}
+								send_byte(checksum);
+								is_ack();
+							}
+							else{
+								printf("Nothing to protect\n");
+							}
+						}
+						break;
+
+			case 'r':	send_command("WRITE UNPROTECT", CMD_WRITE_UNPROTECT);
+						break;
+
+			case 'a':	send_command("READOUT PROTECT", CMD_READOUT_PROTECT);
+						break;
+
+			case 'u':	send_command("READOUT UNPROTECT", CMD_READOUT_UNPROTECT);
+						break;
+
 			default:	printf("Not implemented yet\n");
 						break;
 		}
@@ -371,8 +406,10 @@ char is_ack(void){
 
 char get_command(void){
 	char a;
-	printf("\n\n[q]quit             [i]nit              [g]et               get [v]ersion       get i[d]\n");
-	printf("[r]ead memory       g[o]                [w]rite memory\n");
+	printf("\n\n");
+	printf("[q]quit             [i]nit              [g]et               get [v]ersion\n");
+	printf("get i[d]            read [m]emory       g[o]                [w]rite memory\n");
+	printf("wri[t]e protect     write unp[r]otect   re[a]d protect      read [u]nprotect\n");
 
 	printf("Select command: ");
 	scanf("%c", &a);
