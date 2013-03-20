@@ -81,8 +81,11 @@ int main(void){
 
 	options.c_cflag |= PARENB;
 	options.c_cflag &= ~CSTOPB;
-	//options.c_cflag &= ~CSIZE;
 	options.c_cflag |= CS8;
+	options.c_lflag &= ~ICANON;
+
+	options.c_cc[VMIN]  = 1;
+	options.c_cc[VTIME] = 0;
 
 	tcsetattr(fd, TCSANOW, &options);
 
@@ -366,10 +369,8 @@ void write_mem(unsigned char *str, unsigned int fromaddr, unsigned int totalnum)
 }
 
 void send_byte(unsigned char byte){
-	int i;
-	int a;
-	a = write(fd, &byte, 1);
-	for(i=0; i<500000;i++)a++;
+	write(fd, &byte, 1);
+	tcdrain(fd);
 }
 
 unsigned char send_command(char *title, unsigned char byte){
@@ -386,10 +387,7 @@ unsigned char send_command(char *title, unsigned char byte){
 }
 
 char recv_byte(unsigned char *byte){
-	int i;
-	int a;
-	a = read(fd, byte, 1);
-	for(i=0; i<1000000;i++)a++;
+	read(fd, byte, 1);
 	return (byte[0]);
 }
 
