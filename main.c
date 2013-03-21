@@ -12,6 +12,7 @@
  *  ROTAS
  */
 #include "stdio.h"
+#include "string.h"
 #include "fcntl.h"
 #include "unistd.h"
 #include "termios.h"
@@ -70,16 +71,24 @@ int main(int argc, char *argv[]){
 	unsigned char command;
 	struct termios options;
 
-	if(argc <= 1){
-		//fd = open("/dev/rfcomm0", O_RDWR);
-		printf("Trying /dev/ttyUSB0...");
-		fd = open("/dev/ttyUSB0", O_RDWR);
-	}
-	else{
-		printf("Trying %s...", argv[1]);
-		fd = open(argv[1], O_RDWR);
+	char tty[32] = "/dev/ttyUSB0";
+
+	for(i=1; i<argc; i++){
+		if(strncmp(argv[i], "/dev/", 5) == 0){
+			strcpy(tty, argv[i]);
+		}
+		else{
+			if((fd = open(argv[i], O_RDONLY)) != -1){
+				printf("File to be written...%s\n", argv[i]);
+				close(fd);
+			}
+		}
 	}
 
+
+
+	printf("Trying %s...", tty);
+	fd = open(tty, O_RDWR);
 
 	if(fd == -1){
 		printf("ERROR\n");
