@@ -4,27 +4,35 @@
  *  Created on: Mar 19, 2013
  *      Author: nemo
  */
-
+/*
+ * 	SATOR
+ *  AREPO
+ *  TENET
+ *  OPERA
+ *  ROTAS
+ */
 #include "stdio.h"
 #include "fcntl.h"
 #include "unistd.h"
 #include "termios.h"
+#include "sys/stat.h"
 
-#define	CMD_INIT			((unsigned char)0x7F)
-#define	CMD_GET				((unsigned char)0x00)
-#define	CMD_GET_BL_VER		((unsigned char)0x01)
+#define	CMD_INIT				((unsigned char)0x7F)
+#define	CMD_GET					((unsigned char)0x00)
+#define	CMD_GET_BL_VER			((unsigned char)0x01)
 
-#define	CMD_GET_ID			((unsigned char)0x02)
-#define	CMD_READ_MEM		((unsigned char)0x11)
-#define	CMD_GO				((unsigned char)0x21)
-#define	CMD_WRITE_MEM		((unsigned char)0x31)
-#define	CMD_ERASE			((unsigned char)0x43)
-#define	CMD_EXT_ERASE		((unsigned char)0x44)
-#define	CMD_WRITE_PROTECT	((unsigned char)0x63)
-#define	CMD_WRITE_UNPROTECT	((unsigned char)0x73)
-#define	CMD_READ_PROTECT	((unsigned char)0x82)
-#define	CMD_READ_UNPROTECT	((unsigned char)0x92)
+#define	CMD_GET_ID				((unsigned char)0x02)
+#define	CMD_READ_MEM			((unsigned char)0x11)
+#define	CMD_GO					((unsigned char)0x21)
+#define	CMD_WRITE_MEM			((unsigned char)0x31)
+#define	CMD_ERASE				((unsigned char)0x43)
+#define	CMD_EXT_ERASE			((unsigned char)0x44)
+#define	CMD_WRITE_PROTECT		((unsigned char)0x63)
+#define	CMD_WRITE_UNPROTECT		((unsigned char)0x73)
+#define	CMD_READOUT_PROTECT		((unsigned char)0x82)
+#define	CMD_READOUT_UNPROTECT	((unsigned char)0x92)
 
+#define	CMD_GLOBAL_ERASE		((unsigned char)0xFF)
 
 #define	ACK		0x79
 #define	NACK	0x1F
@@ -34,259 +42,417 @@
 int fd;
 unsigned char errcode;
 
-void send_command(unsigned char);
+char get_command(void);
+
+unsigned char send_command(char *, unsigned char);
 void send_byte(unsigned char);
-void recv_byte(unsigned char *);
-void get_params(int *, int *);
+char recv_byte(unsigned char *);
 
-void init(void);
-void get(void);
-void get_bootloader_version(void);
-void get_id(void);
-void read_mem(void);
-void go(void);
+void read_mem(unsigned char *, unsigned int addr, unsigned int num);
+void write_mem(unsigned char *, unsigned int addr, unsigned int num);
 
+char is_ack(void);
 
+int main(int argc, char *argv[]){
+	int fil;
+	int i;
+	unsigned char bytes_to_read;
+	unsigned char str[MAX_BYTES_TO_READ];
+	unsigned char bootloader_version;
+	unsigned char rpd;
+	unsigned char rpe;
 
-char checksum(int);
+	unsigned int addr;
+	unsigned int num;
+	unsigned int remain;
+	unsigned char checksum;
 
-void get_ack_nack(void);
-
-int main(void){
-	int command;
+	unsigned char command;
 	struct termios options;
-	errcode = ACK;
 
-	//fd = open("/dev/rfcomm0", O_RDWR);
-	fd = open("/dev/ttyUSB1", O_RDWR/* | O_NOCTTY*/);
+	if(argc <= 1){
+		//fd = open("/dev/rfcomm0", O_RDWR);
+		printf("Trying /dev/ttyUSB0...");
+		fd = open("/dev/ttyUSB0", O_RDWR);
+	}
+	else{
+		printf("Trying %s...", argv[1]);
+		fd = open(argv[1], O_RDWR);
+	}
+
+
+	if(fd == -1){
+		printf("ERROR\n");
+		return (1);
+	}
+	else{
+		printf("OK\n");
+	}
 
 	fcntl(fd, F_SETFL, 0);
 
 	tcgetattr(fd, &options);
 
-	cfsetospeed(&options, B4800);
+	cfsetospeed(&options, B115200);
 
 	options.c_cflag |= PARENB;
 	options.c_cflag &= ~CSTOPB;
-	//options.c_cflag &= ~CSIZE;
 	options.c_cflag |= CS8;
+	options.c_lflag &= ~ICANON;
+
+	options.c_cc[VMIN]  = 1;
+	options.c_cc[VTIME] = 0;
 
 	tcsetattr(fd, TCSANOW, &options);
 
-
-	printf("fd: %08x\n", fd);
-
-	command = -1;
-	while(command != 0){
-		printf("0 - Quit\n");
-		printf("1 - Init\n");
-		printf("2 - Get\n");
-		printf("3 - Get bootloader version\n");
-		printf("4 - Get ID\n");
-		printf("5 - Read memory\n");
-		printf("6 - Go\n");
-		printf("100 - Unhang\n");
-		printf("Select command\n");
-		scanf("%d", &command);
-
-		printf("command: %d\n", command);
+	while((command = get_command()) != 0){
 		switch(command){
-			case 1:		init();
+/* INIT */
+			case 1:		send_command("INIT", CMD_INIT);
 						break;
-			case 2:		get();
+/* GET */
+			case 2:		if(send_command("GET", CMD_GET) == ACK){
+							printf("Bytes to read...");
+							recv_byte(&bytes_to_read);
+							printf("%d\n", bytes_to_read);
+
+							printf("Reading bytes...");
+							for(i=0; i<=bytes_to_read; i++)recv_byte(&str[i]);
+
+							if(is_ack()){
+								for(i=0; i<=bytes_to_read; i++) printf("%x ", str[i]);
+								printf("\n");
+							}
+						}
 						break;
-			case 3:		get_bootloader_version();
+/* GET VERSION */
+			case 3:		if(send_command("GET VER", CMD_GET_BL_VER) == ACK){
+							printf("Params reading...");
+							recv_byte(&bootloader_version);
+							recv_byte(&rpd);
+							recv_byte(&rpe);
+							if(is_ack()){
+								printf("%x %x %x\n", bootloader_version, rpd, rpe);
+							}
+						}
 						break;
-			case 4:		get_id();
+/* GET ID */
+			case 4:		if(send_command("GET ID", CMD_GET_ID) == ACK){
+							printf("Bytes to read...");
+							recv_byte(&bytes_to_read);
+							printf("%d\n", bytes_to_read);
+
+							printf("Reading bytes...");
+							for(i=0 ;i<=bytes_to_read; i++){
+								recv_byte(&str[i]);
+							}
+
+							if(is_ack()){
+								for(i=0; i<=bytes_to_read; i++) printf("%x ", str[i]);
+								printf("\n");
+							}
+						}
 						break;
-			case 5:		read_mem();
+/* READ MEM */
+			case 5:		printf("Enter start address (HEX)...");
+						scanf("%x", &addr);
+						printf("Enter num bytes (DEC)...");
+						scanf("%d", &num);
+
+						fil = open("./readfile.txt", O_RDWR | O_CREAT, S_IRWXO | S_IRWXU | S_IRWXG);
+
+						for(i=0; i<num/MAX_BYTES_TO_READ; i++){
+							read_mem(str, addr + i*MAX_BYTES_TO_READ, MAX_BYTES_TO_READ);
+							write(fil, str, MAX_BYTES_TO_READ);
+						}
+
+						remain = num%MAX_BYTES_TO_READ;
+
+						if(remain > 0){
+							read_mem(str, addr + i*MAX_BYTES_TO_READ, remain);
+							write(fil, str, remain);
+						}
+
+						close(fil);
 						break;
-			case 6:		go();
+/* GO */
+			case 6:		if(send_command("GO", CMD_GO) == ACK){
+							printf("Enter start address (HEX)...");
+							scanf("%x", &addr);
+
+							printf("Sending start address (%08x)...", addr);
+							send_byte((addr >> 24) & 0xFF);	checksum  =	(addr >> 24) & 0xFF;
+							send_byte((addr >> 16) & 0xFF);	checksum ^=	(addr >> 16) & 0xFF;
+							send_byte((addr >>  8) & 0xFF);	checksum ^=	(addr >>  8) & 0xFF;
+							send_byte((addr >>  0) & 0xFF);	checksum ^=	(addr >>  0) & 0xFF;
+							send_byte(checksum);
+							if(is_ack()){
+								printf("Getting acknowledge...");
+								is_ack();
+							}
+						}
 						break;
-			case 100:	send_byte(0x7F);
+/* WRITE MEM */
+			case 7:		printf("Enter start address (HEX)...");
+						scanf("%x", &addr);
+
+						fil = open("./writefile.txt", O_RDONLY);
+						num = lseek(fil, 0, SEEK_END);
+						close(fil);
+						fil = open("./writefile.txt", O_RDONLY);
+
+						for(i=0; i<num/MAX_BYTES_TO_READ; i++){
+							read(fil, str, MAX_BYTES_TO_READ);
+							write_mem(str, addr + i*MAX_BYTES_TO_READ, MAX_BYTES_TO_READ);
+						}
+
+						remain = num%MAX_BYTES_TO_READ;
+
+						if(remain%4 != 0) remain += 4-(remain%4);
+
+						if(num%MAX_BYTES_TO_READ > 0){
+							read(fil, str, num%MAX_BYTES_TO_READ);
+							for(i=0; i<remain-num%MAX_BYTES_TO_READ; i++){
+								str[num%MAX_BYTES_TO_READ + i] = 0;
+							}
+							write_mem(str, addr + i*MAX_BYTES_TO_READ, remain);
+						}
+
+						close(fil);
 						break;
-			default:	break;
+/* ERASE */
+			case 8:		if(send_command("ERASE", CMD_ERASE) == ACK){
+							printf("Enter amount of pages to be erased (DEC)...");
+							scanf("%d", &num);
+
+							if(num == 255){
+								send_command("GLOBAL ERASE", CMD_GLOBAL_ERASE);
+							}
+							else{
+								if(num > 0){
+									for(i=0; i<num; i++){
+										printf("Enter [%d] page number to be erased...", i);
+										scanf("%d", &addr);
+										str[i] = addr&0xFF;
+									}
+
+									printf("Erasing pages...");
+									send_byte(num-1);			checksum  =	num-1;
+									for(i=0; i<num; i++){
+										send_byte(str[i]);		checksum ^= str[i];
+									}
+									send_byte(checksum);
+									is_ack();
+								}
+								else{
+									printf("Nothing to erase\n");
+								}
+							}
+						}
+						break;
+/* WRITE PROTECT */
+			case 9:		if(send_command("WRITE PROTECT", CMD_WRITE_PROTECT) == ACK){
+							printf("Enter amount of sectors to be protected (DEC)...");
+							scanf("%d", &num);
+
+							if(num > 0){
+								for(i=0; i<num; i++){
+									printf("Enter [%d] sector number to be protected...", i+1);
+									scanf("%d", &addr);
+									str[i] = addr&0xFF;
+								}
+
+								printf("Protecting sectors...");
+								send_byte(num-1);			checksum  =	num-1;
+								for(i=0; i<num; i++){
+									send_byte(str[i]);		checksum ^= str[i];
+								}
+								send_byte(checksum);
+								if(is_ack()){
+									sleep(1);
+									send_command("INIT", CMD_INIT);
+								}
+							}
+							else{
+								printf("Nothing to protect\n");
+							}
+						}
+						break;
+/* WRITE UNPROTECT */
+			case 10:	if(send_command("WRITE UNPROTECT", CMD_WRITE_UNPROTECT) == ACK){
+							printf("Unprotecting memory for writing...");
+							if(is_ack()){
+								sleep(1);
+								send_command("INIT", CMD_INIT);
+							}
+						}
+						break;
+/* READOUT PROTECT */
+			case 11:	if(send_command("READOUT PROTECT", CMD_READOUT_PROTECT) == ACK){
+							printf("Protecting memory for readout...");
+							if(is_ack()){
+								sleep(1);
+								send_command("INIT", CMD_INIT);
+							}
+						}
+						break;
+/* READOUT UNPROTECT */
+			case 12:	if(send_command("READOUT UNPROTECT", CMD_READOUT_UNPROTECT) == ACK){
+							printf("Unprotecting memory for readout...");
+							if(is_ack()){
+								sleep(1);
+								send_command("INIT", CMD_INIT);
+							}
+						}
+						break;
+
+			default:	printf("Not implemented yet\n");
+						break;
 		}
 	}
 	close(fd);
 
+	printf("Bye.\n");
 	return (0);
 }
 
-void init(void){
-	errcode = NACK;
-	printf("Sending init...");
-	while(errcode != ACK){
-		send_command(CMD_INIT);
-	}
-}
+void read_mem(unsigned char *str, unsigned int fromaddr, unsigned int totalnum){
+	int i, j;
+	unsigned char checksum;
 
-void get(void){
-	int i;
-	unsigned char bytes_to_read;
-	unsigned char str[MAX_BYTES_TO_READ];
+	union{
+		unsigned int	ui;
+		unsigned char	c[4];
+	}addr;
 
-	printf("Sending GET command...");
-	send_command(CMD_GET);
+	union{
+		unsigned int	ui;
+		unsigned char	c[4];
+	}num;
 
-	if(errcode == ACK){
-		printf("Bytes to read...");
-		recv_byte(&bytes_to_read);
-		printf("%d\n", bytes_to_read);
-		printf("Reading bytes...");
+	addr.ui = fromaddr;
+	num.ui	= totalnum - 1;
 
-		for(i=0; i<=bytes_to_read; i++)recv_byte(&str[i]);
-		get_ack_nack();
+	if(send_command("READ MEM", CMD_READ_MEM) == ACK){
 
-		if(errcode == ACK){
-			for(i=0; i<=bytes_to_read; i++) printf("%x ", str[i]);
-			printf("\n");
-		}
-	}
+		printf("Sending start address (%08x)...", addr.ui);
+		send_byte(addr.c[3]);	checksum  = addr.c[3];
+		send_byte(addr.c[2]);	checksum ^= addr.c[2];
+		send_byte(addr.c[1]);	checksum ^= addr.c[1];
+		send_byte(addr.c[0]);	checksum ^= addr.c[0];
+		send_byte(checksum);
+		if(is_ack()){
+			printf("Sending num bytes (%d)...", num.c[0]);
+			checksum = 0xFF;
+			send_byte(num.c[0]);	checksum ^= num.c[0];
+			send_byte(checksum);
 
-}
-
-void get_bootloader_version(void){
-	unsigned char bootloader_version;
-	unsigned char rpd;
-	unsigned char rpe;
-	printf("Sending GET BOOTLOADER VER command...");
-	send_command(CMD_GET_BL_VER);
-	recv_byte(&bootloader_version);
-	recv_byte(&rpd);
-	recv_byte(&rpe);
-	get_ack_nack();
-	if(errcode == ACK){
-		printf("%x %x %x\n", bootloader_version, rpd, rpe);
-	}
-}
-
-void get_id(void){
-	int i;
-	unsigned char str[MAX_BYTES_TO_READ];
-	unsigned char bytes_to_read;
-	printf("Sending GET ID command...");
-	send_command(CMD_GET_ID);
-	if(errcode == ACK){
-		printf("Bytes to read...");
-		recv_byte(&bytes_to_read);
-		printf("%d\n", bytes_to_read);
-		printf("Reading bytes...");
-		for(i=0 ;i<=bytes_to_read; i++){
-			recv_byte(&str[i]);
-		}
-		get_ack_nack();
-		if(errcode == ACK){
-			for(i=0; i<=bytes_to_read; i++) printf("%x ", str[i]);
-			printf("\n");
-		}
-	}
-}
-
-void read_mem(void){
-	int addr;
-	int num;
-	int i;
-	unsigned char str[MAX_BYTES_TO_READ];
-
-	get_params(&addr, &num);
-
-	printf("Sending READ MEM command...");
-	send_command(CMD_READ_MEM);
-	if(errcode == ACK){
-		printf("Sending start address (%08x)...", addr);
-		send_byte((addr >> 24)&0xFF);
-		send_byte((addr >> 16)&0xFF);
-		send_byte((addr >>  8)&0xFF);
-		send_byte((addr >>  0)&0xFF);
-		send_byte(checksum(addr));
-		get_ack_nack();
-		if(errcode == ACK){
-			printf("Sending num bytes (%d)...", num);
-			send_byte(num&0xFF);
-			send_byte(checksum((num&0xFF)^0xFF));
-			get_ack_nack();
-			if(errcode == ACK){
-				for(i=0; i<=num; i++){
-					recv_byte(&str[i]);
-					printf("%02x ", str[i]);
+			if(is_ack()){
+				i=0;
+				while(i<=num.c[0]){
+					for(j=0; j<16; j++, i++){
+						if(i <= num.c[0]){
+							recv_byte(&str[i]);
+							//printf("%02x ", str[i]);
+						}
+						else{
+							break;
+						}
+					}
+					//printf("\n");
 				}
-				printf("\n");
 			}
 		}
 	}
 }
 
-void go(void){
-	int addr;
+void write_mem(unsigned char *str, unsigned int fromaddr, unsigned int totalnum){
+	int i, j;
+	char checksum;
 
-	printf("Enter start address\n");
-	scanf("%x", &addr);
+	union{
+		unsigned int	ui;
+		unsigned char	c[4];
+	}addr;
+	union{
+		unsigned int	ui;
+		unsigned char	c[4];
+	}num;
 
-	printf("Sending GO command...");
-	send_command(CMD_GO);
-	if(errcode == ACK){
-		printf("Sending start address (%08x)...", addr);
-		send_byte((addr >> 24)&0xFF);
-		send_byte((addr >> 16)&0xFF);
-		send_byte((addr >>  8)&0xFF);
-		send_byte((addr >>  0)&0xFF);
-		send_byte(checksum(addr));
-		get_ack_nack();
-		if(errcode == ACK){
-			get_ack_nack();
-			if(errcode == ACK){
-				printf("OK\n");
+	addr.ui = fromaddr;
+	num.ui	= totalnum-1;
+
+	if(send_command("WRITE MEM", CMD_WRITE_MEM) == ACK){
+		printf("Sending start address (%08x)...", addr.ui);
+		send_byte(addr.c[3]);	checksum  = addr.c[3];
+		send_byte(addr.c[2]);	checksum ^= addr.c[2];
+		send_byte(addr.c[1]);	checksum ^= addr.c[1];
+		send_byte(addr.c[0]);	checksum ^= addr.c[0];
+		send_byte(checksum);
+		if(is_ack()){
+
+			printf("Sending num bytes (%d) and data packet...", num.c[0]);
+			checksum = 0x0;
+			send_byte(num.c[0]);	checksum ^= num.c[0];
+
+			i=0;
+			while(i<=num.c[0]){
+				for(j=0; j<16; j++, i++){
+					if(i <= num.c[0]){
+						send_byte(str[i]);	checksum ^= str[i];
+					}
+				}
 			}
+			send_byte(checksum);
+			is_ack();
 		}
 	}
 }
-
 
 void send_byte(unsigned char byte){
-	int i;
-	int a;
-	a = write(fd, &byte, 1);
-	for(i=0; i<500000;i++)a++;
+	write(fd, &byte, 1);
+	tcdrain(fd);
 }
 
-void send_command(unsigned char byte){
+unsigned char send_command(char *title, unsigned char byte){
+	printf("Sending %s command...", title);
+
 	send_byte(byte);
-	if(byte != 0x7F){
-		send_byte(byte^0xFF);
+	if(byte != 0x7F) send_byte(byte^0xFF);
+
+	if(is_ack()){
+		return (ACK);
 	}
-	get_ack_nack();
+
+	return(NACK);
 }
 
-void recv_byte(unsigned char *byte){
-	int i;
+char recv_byte(unsigned char *byte){
+	read(fd, byte, 1);
+	return (byte[0]);
+}
+
+char is_ack(void){
+	if(recv_byte(&errcode) == ACK){
+		printf("ACK\n");
+		return (1);
+	}
+	else{
+		printf("NACK\n");
+		return (0);
+	}
+}
+
+char get_command(void){
 	int a;
-	a = read(fd, byte, 1);
-	for(i=0; i<1000000;i++)a++;
-}
+	printf("\n\n");
+	printf("0 - quit              1 - init              2 - get               3 - get version\n");
+	printf("4 - get id            5 - read memory       6 - go                7 - write memory\n");
+	printf("8 - erase             9 - write protect     10- write unprotect   11- read protect\n");
+	printf("12- read unprotect\n");
 
-void get_ack_nack(void){
-	int i;
-	int a;
-	recv_byte(&errcode);
-	//printf("errcode: %x\n", errcode);
-}
+	printf("Select command: ");
+	scanf("%d", &a);
 
-void get_params(int *addr, int *num){
-
-	printf("Enter start address\n");
-	scanf("%x", addr);
-	printf("Enter num bytes\n");
-	scanf("%d", num);
-
-	return;
-}
-
-char checksum(int val){
-	char chksum;
-	chksum = (((val >> 24)&0xFF)^(( val >> 16)&0xFF)^((val >> 8)&0xFF)^((val >> 0)&0xFF));
-
-	printf("Checksum: %x\n", chksum);
-
-	return (chksum);
+	return (a);
 }
