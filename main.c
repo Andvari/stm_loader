@@ -43,20 +43,21 @@
 int fd;
 unsigned char errcode;
 
-char get_command(void);
+char			get_command(void);
 
-unsigned char send_command(char *, unsigned char);
-void send_byte(unsigned char);
-char recv_byte(unsigned char *);
+unsigned char	send_command(char *, unsigned char);
+void			send_byte(unsigned char);
+char			recv_byte(unsigned char *);
 
-void read_mem(unsigned char *, unsigned int addr, unsigned int num);
-char write_mem(unsigned char *, unsigned int addr, unsigned int num);
+void			read_mem(unsigned char *, unsigned int addr, unsigned int num);
+char			write_mem(unsigned char *, unsigned int addr, unsigned int num);
 
-char is_ack(void);
+char			is_ack(void);
 
-void write_image(char *);
-int decode_string(unsigned char *, int);
-char flash_it(unsigned char *, unsigned int, int);
+void			write_image(char *);
+int				decode_string(unsigned char *, int);
+char			flash_it(unsigned char *, unsigned int, int);
+int				get_page(int);
 
 int main(int argc, char *argv[]){
 	int fil;
@@ -509,8 +510,13 @@ void write_image(char *filename){
 	unsigned char tmp[4];
 	unsigned int start_address;
 	unsigned int current_lenght;
+	int list_erased_pages[256];
+	unsigned char checksum;
+	int pagenum;
 
 	RECORD rec;
+
+	memset(list_erased_pages, 0, sizeof(list_erased_pages));
 
 	fil = open(filename, O_RDONLY);
 
@@ -556,6 +562,18 @@ void write_image(char *filename){
 
 		switch(rec.type){
 		case	TYPE_DATA:		if(is_addr_set > 0){
+									pagenum = get_page(rec.base_addr + rec.addr_offset);
+									if(list_erased_pages[pagenum] == 0){
+										list_erased_pages[pagenum] = 1;
+										if(send_command("ERASE", CMD_ERASE) == ACK){
+											printf("Erasing page %d...", pagenum);
+											send_byte(1-1);			checksum  =	1-1;
+											send_byte(pagenum);		checksum ^= pagenum;
+											send_byte(checksum);
+											is_ack();
+										}
+									}
+
 									if(is_addr_set == 1){
 										start_address = rec.base_addr + rec.addr_offset;
 										is_addr_set = 2;
@@ -631,7 +649,7 @@ int decode_string(unsigned char *str, int len){
 		}
 	}
 
-	return a;
+	return (a);
 }
 
 char flash_it(unsigned char *data, unsigned int addr, int size){
@@ -659,5 +677,9 @@ char flash_it(unsigned char *data, unsigned int addr, int size){
 
 		if(checksum_to_stm != checksum_from_stm) write_status = 1;
 	}
-	return write_status;
+	return (write_status);
+}
+
+int get_page(int addr){
+	return ((addr >> 11)&0xFF);
 }
