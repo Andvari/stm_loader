@@ -56,6 +56,7 @@ char is_ack(void);
 
 void write_image(char *);
 int decode_string(unsigned char *, int);
+char flash_it(unsigned char *, unsigned int, int);
 
 int main(int argc, char *argv[]){
 	int fil;
@@ -503,12 +504,11 @@ void write_image(char *filename){
 	int fil;
 	unsigned int is_addr_set = 0;
 	unsigned int eof = 0;
-	unsigned char data_from_stm[MAX_BYTES_IN_RECORD];
-	unsigned char checksum_to_stm;
-	unsigned char checksum_from_stm;
-	unsigned int  num_bytes_to_stm;
+	unsigned char data_to_stm[MAX_BYTES_IN_RECORD];
 	char write_status = 0;
 	unsigned char tmp[4];
+	unsigned int start_address;
+	unsigned int current_lenght;
 
 	RECORD rec;
 
@@ -521,6 +521,7 @@ void write_image(char *filename){
 
 	if(send_command("INIT", CMD_INIT) != ACK)return;
 
+	current_lenght = 0;
 	while(!eof){
 
 		do{
@@ -554,40 +555,50 @@ void write_image(char *filename){
 		if(eof)break;
 
 		switch(rec.type){
-		case	TYPE_DATA:			if(is_addr_set){
-									num_bytes_to_stm = rec.num_bytes;
-
-									if(num_bytes_to_stm%4 != 0) num_bytes_to_stm += 4-(num_bytes_to_stm%4);
-									for(i=0; i<num_bytes_to_stm - rec.num_bytes; i++){
-										rec.data[rec.num_bytes + i] = 0xFF;
+		case	TYPE_DATA:		if(is_addr_set > 0){
+									if(is_addr_set == 1){
+										start_address = rec.base_addr + rec.addr_offset;
+										is_addr_set = 2;
 									}
-
-									checksum_to_stm   = write_mem(&rec.data[0], rec.base_addr + rec.addr_offset, num_bytes_to_stm);
-									read_mem(data_from_stm, rec.base_addr+rec.addr_offset, num_bytes_to_stm);
-									checksum_from_stm = num_bytes_to_stm-1;
-									for(i=0; i<num_bytes_to_stm; i++){
-										checksum_from_stm ^= data_from_stm[i];
+									if(start_address + current_lenght == rec.base_addr + rec.addr_offset){
+										if(current_lenght + rec.num_bytes <= MAX_BYTES_TO_READ){
+											memcpy(&data_to_stm[current_lenght], rec.data, rec.num_bytes);
+											current_lenght += rec.num_bytes;
+										}
+										else{
+											write_status = flash_it(data_to_stm, start_address, current_lenght);
+											if(write_status!=0)eof=1;
+											start_address = rec.base_addr + rec.addr_offset;
+											memcpy(data_to_stm, rec.data, rec.num_bytes);
+											current_lenght = rec.num_bytes;
+										}
 									}
-
-									if(checksum_to_stm != checksum_from_stm){
-										write_status = 1;
-										eof = 1;
+									else{
+										write_status = flash_it(data_to_stm, start_address, current_lenght);
+										if(write_status!=0)eof=1;
+										start_address = rec.base_addr + rec.addr_offset;
+										memcpy(data_to_stm, rec.data, rec.num_bytes);
+										current_lenght = rec.num_bytes;
 									}
 								}
 								else{
-									printf("Data record without address\n");
+									printf("Data record without base address\n");
 									write_status = 1;
 									eof = 1;
 								}
 								break;
 		case	TYPE_EOF:		eof = 1;
 								break;
-		case	TYPE_ADDR:		rec.base_addr = ((rec.data[0] * 256 + rec.data[1]) * 16) << 16;
-								printf("Base addr: %08x\n", rec.base_addr);
+		case	TYPE_ADDR:		write_status = flash_it(data_to_stm, start_address, current_lenght);
+								if(write_status!=0)eof=1;
+								current_lenght = 0;
+								rec.base_addr = ((rec.data[0] * 256 + rec.data[1]) * 16) << 16;
 								is_addr_set = 1;
 								break;
-		case	TYPE_EXT_ADDR:	rec.base_addr = (rec.data[0] * 256 + rec.data[1]) << 16;
-								printf("Base addr: %08x\n", rec.base_addr);
+		case	TYPE_EXT_ADDR:	write_status = flash_it(data_to_stm, start_address, current_lenght);
+								if(write_status!=0)eof=1;
+								current_lenght = 0;
+								rec.base_addr = (rec.data[0] * 256 + rec.data[1]) << 16;
 								is_addr_set = 1;
 								break;
 		default:
@@ -621,4 +632,32 @@ int decode_string(unsigned char *str, int len){
 	}
 
 	return a;
+}
+
+char flash_it(unsigned char *data, unsigned int addr, int size){
+	int i;
+	int write_status = 0;
+	int num_bytes_to_stm;
+	unsigned char data_from_stm[MAX_BYTES_IN_RECORD];
+	unsigned char checksum_to_stm;
+	unsigned char checksum_from_stm;
+
+	if(size > 0){
+		num_bytes_to_stm = size;
+
+		if(num_bytes_to_stm%4 != 0) num_bytes_to_stm += 4-(num_bytes_to_stm%4);
+		for(i=0; i<num_bytes_to_stm - size; i++){
+			data[size + i] = 0xFF;
+		}
+
+		checksum_to_stm = write_mem(data, addr, num_bytes_to_stm);
+		read_mem(data_from_stm, addr, num_bytes_to_stm);
+		checksum_from_stm = num_bytes_to_stm-1;
+		for(i=0; i<num_bytes_to_stm; i++){
+			checksum_from_stm ^= data_from_stm[i];
+		}
+
+		if(checksum_to_stm != checksum_from_stm) write_status = 1;
+	}
+	return write_status;
 }
