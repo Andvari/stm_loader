@@ -50,9 +50,12 @@ void send_byte(unsigned char);
 char recv_byte(unsigned char *);
 
 void read_mem(unsigned char *, unsigned int addr, unsigned int num);
-void write_mem(unsigned char *, unsigned int addr, unsigned int num);
+char write_mem(unsigned char *, unsigned int addr, unsigned int num);
 
 char is_ack(void);
+
+void write_image(char *);
+int decode_string(unsigned char *, int);
 
 int main(int argc, char *argv[]){
 	int fil;
@@ -70,7 +73,8 @@ int main(int argc, char *argv[]){
 
 	unsigned char command;
 	struct termios options;
-
+	int idx_file = -1;
+	int idx_tty = -1;
 	char tty[32] = "/dev/ttyUSB0";
 
 	for(i=1; i<argc; i++){
@@ -79,16 +83,19 @@ int main(int argc, char *argv[]){
 		}
 		else{
 			if((fd = open(argv[i], O_RDONLY)) != -1){
-				printf("File to be written...%s\n", argv[i]);
-				close(fd);
+				idx_file = i;
 			}
 		}
 	}
 
-
-
-	printf("Trying %s...", tty);
-	fd = open(tty, O_RDWR);
+	if(idx_tty != -1){
+		printf("Trying %s...", argv[idx_tty]);
+		fd = open(argv[idx_tty], O_RDWR);
+	}
+	else{
+		printf("Trying /dev/ttyUSB0...");
+		fd = open("/dev/ttyUSB0", O_RDWR);
+	}
 
 	if(fd == -1){
 		printf("ERROR\n");
@@ -113,6 +120,13 @@ int main(int argc, char *argv[]){
 	options.c_cc[VTIME] = 0;
 
 	tcsetattr(fd, TCSANOW, &options);
+
+	if(idx_file != -1){
+		printf("File to be written...%s\n", argv[idx_file]);
+		write_image(argv[idx_file]);
+		close(fd);
+		return (0);
+	}
 
 	while((command = get_command()) != 0){
 		switch(command){
@@ -222,7 +236,7 @@ int main(int argc, char *argv[]){
 						if(num%MAX_BYTES_TO_READ > 0){
 							read(fil, str, num%MAX_BYTES_TO_READ);
 							for(i=0; i<remain-num%MAX_BYTES_TO_READ; i++){
-								str[num%MAX_BYTES_TO_READ + i] = 0;
+								str[num%MAX_BYTES_TO_READ + i] = 0xFF;
 							}
 							write_mem(str, addr + i*MAX_BYTES_TO_READ, remain);
 						}
@@ -375,7 +389,7 @@ void read_mem(unsigned char *str, unsigned int fromaddr, unsigned int totalnum){
 	}
 }
 
-void write_mem(unsigned char *str, unsigned int fromaddr, unsigned int totalnum){
+char write_mem(unsigned char *str, unsigned int fromaddr, unsigned int totalnum){
 	int i, j;
 	char checksum;
 
@@ -416,6 +430,7 @@ void write_mem(unsigned char *str, unsigned int fromaddr, unsigned int totalnum)
 			is_ack();
 		}
 	}
+	return checksum;
 }
 
 void send_byte(unsigned char byte){
@@ -464,4 +479,146 @@ char get_command(void){
 	scanf("%d", &a);
 
 	return (a);
+}
+
+#define MAX_BYTES_IN_RECORD	255
+
+#define	TYPE_DATA		0
+#define	TYPE_EOF		1
+#define	TYPE_ADDR		2
+#define	TYPE_EXT_ADDR	4
+
+typedef struct{
+	unsigned char header;
+	unsigned char num_bytes;
+	unsigned int base_addr;
+	unsigned short int addr_offset;
+	unsigned char type;
+	unsigned char data[MAX_BYTES_IN_RECORD];
+	unsigned char checksum;
+}RECORD;
+
+void write_image(char *filename){
+	int i;
+	int fil;
+	unsigned int is_addr_set = 0;
+	unsigned int eof = 0;
+	unsigned char data_from_stm[MAX_BYTES_IN_RECORD];
+	unsigned char checksum_to_stm;
+	unsigned char checksum_from_stm;
+	unsigned int  num_bytes_to_stm;
+	char write_status = 0;
+	unsigned char tmp[4];
+
+	RECORD rec;
+
+	fil = open(filename, O_RDONLY);
+
+	if (fil == -1){
+		printf("Error opening file\n");
+		return;
+	}
+
+	if(send_command("INIT", CMD_INIT) != ACK)return;
+
+	while(!eof){
+
+		do{
+			if(read(fil, &rec.header, 1) == 0) eof = 1;
+			if(eof)break;
+		}
+		while(rec.header != ':');
+
+		if(eof)break;
+
+		if(read(fil, &tmp, 2) == 0) eof = 1;
+		rec.num_bytes = (char)decode_string(&tmp[0], 2);
+		if(eof)break;
+
+		if(read(fil, &tmp, 4) == 0) eof = 1;
+		rec.addr_offset = (unsigned short)decode_string(&tmp[0], 4);
+		if(eof)break;
+
+		if(read(fil, &tmp[0], 2) == 0) eof = 1;
+		rec.type = (char)decode_string(&tmp[0], 2);
+		if(eof)break;
+
+		for(i=0; i<rec.num_bytes; i++){
+			if(read(fil, &tmp[0], 2) == 0) eof = 1;
+			rec.data[i] = (char)decode_string(&tmp[0], 2);
+			if(eof)break;
+		}
+
+		if(read(fil, &tmp[0], 2) == 0) eof = 1;
+		rec.checksum = (char)decode_string(&tmp[0], 2);
+		if(eof)break;
+
+		switch(rec.type){
+		case	TYPE_DATA:			if(is_addr_set){
+									num_bytes_to_stm = rec.num_bytes;
+
+									if(num_bytes_to_stm%4 != 0) num_bytes_to_stm += 4-(num_bytes_to_stm%4);
+									for(i=0; i<num_bytes_to_stm - rec.num_bytes; i++){
+										rec.data[rec.num_bytes + i] = 0xFF;
+									}
+
+									checksum_to_stm   = write_mem(&rec.data[0], rec.base_addr + rec.addr_offset, num_bytes_to_stm);
+									read_mem(data_from_stm, rec.base_addr+rec.addr_offset, num_bytes_to_stm);
+									checksum_from_stm = num_bytes_to_stm-1;
+									for(i=0; i<num_bytes_to_stm; i++){
+										checksum_from_stm ^= data_from_stm[i];
+									}
+
+									if(checksum_to_stm != checksum_from_stm){
+										write_status = 1;
+										eof = 1;
+									}
+								}
+								else{
+									printf("Data record without address\n");
+									write_status = 1;
+									eof = 1;
+								}
+								break;
+		case	TYPE_EOF:		eof = 1;
+								break;
+		case	TYPE_ADDR:		rec.base_addr = ((rec.data[0] * 256 + rec.data[1]) * 16) << 16;
+								printf("Base addr: %08x\n", rec.base_addr);
+								is_addr_set = 1;
+								break;
+		case	TYPE_EXT_ADDR:	rec.base_addr = (rec.data[0] * 256 + rec.data[1]) << 16;
+								printf("Base addr: %08x\n", rec.base_addr);
+								is_addr_set = 1;
+								break;
+		default:
+								break;
+		}
+	}
+
+	if(write_status == 0){
+		printf("File wrote OK\n");
+	}
+	else{
+		printf("File not written\n");
+	}
+
+
+	close(fil);
+	return;
+}
+
+int decode_string(unsigned char *str, int len){
+	int i;
+	int a;
+	a = 0;
+	for(i=0; i<len; i++){
+		if(str[i] > 57){
+			a = a*16 + str[i] - 65 + 10;
+		}
+		else{
+			a = a*16 + str[i] - 48;
+		}
+	}
+
+	return a;
 }
